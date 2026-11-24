@@ -1,10 +1,18 @@
 {
   "name": "workbuddy-credit-dashboard",
   "displayName": "WorkBuddy Credit Dashboard",
-  "description": "在编辑器内可视化查看 WorkBuddy 积分余额、额度消耗、签到状态与用量趋势",
+  "description": "不用离开编辑器，实时查看 WorkBuddy 积分余额、每日消耗明细与签到状态。",
   "version": "0.1.0",
   "publisher": "yangbaichao",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yangbaichao/credits_buddy.git"
+  },
+  "homepage": "https://github.com/yangbaichao/credits_buddy#readme",
+  "bugs": {
+    "url": "https://github.com/yangbaichao/credits_buddy/issues"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -15,7 +23,11 @@
     "workbuddy",
     "codebuddy",
     "credits",
-    "dashboard"
+    "dashboard",
+    "积分",
+    "额度",
+    "签到",
+    "用量"
   ],
   "activationEvents": [
     "onCommand:workbuddy-credit.openDashboard",
