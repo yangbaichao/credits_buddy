@@ -10,8 +10,7 @@
 
 ![功能演示](media/demo.gif)
 
-
-> 演示动图：`media/demo.gif`（录屏后取消上方注释即可展示）；界面截图：`media/screenshot-dashboard.png`。
+![看板界面](media/screenshot-dashboard.png)
 
 ## 为什么需要它
 
