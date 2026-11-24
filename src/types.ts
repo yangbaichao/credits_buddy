@@ -30,10 +30,18 @@ export interface CheckinResult {
   totalCredits?: number;
 }
 
+export interface UsageRecord {
+  time: string;
+  model: string;
+  credits: number;
+  label: string;
+}
+
 export interface DailyUsage {
   date: string;
   credits: number;
   requests: number;
+  records?: UsageRecord[];
 }
 
 export interface UsageSnapshot {

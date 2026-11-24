@@ -120,6 +120,19 @@ button.primary:hover { opacity: .9; }
 .chip { padding: 3px 9px; font-size: 11px; border-radius: 999px; background: #fff; }
 .chip.active { background: #e8f3ff; border-color: var(--primary); color: var(--primary); font-weight: 600; }
 .chart { width: 100%; height: 200px; }
+.usage-hint { margin-left: auto; font-size: 10px; color: var(--muted); }
+.usage-detail { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.usage-detail.hidden { display: none; }
+.usage-detail-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.usage-detail-close { margin-left: auto; font-size: 11px; color: var(--muted); background: none; border: none; padding: 2px 4px; }
+.usage-detail-close:hover { color: var(--primary); background: none; border: none; }
+.usage-detail-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.usage-detail-row { display: flex; align-items: baseline; gap: 8px; font-size: 11px; padding: 2px 0; }
+.ud-time { flex-shrink: 0; width: 42px; color: var(--muted); }
+.ud-model { flex-shrink: 0; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--primary); }
+.ud-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ud-credit { flex-shrink: 0; color: var(--orange); font-weight: 600; }
+.usage-detail-empty { font-size: 11px; color: var(--muted); padding: 6px 0; }
 .footer { margin-top: 16px; font-size: 10px; color: var(--muted); text-align: center; }
 
 .flatpickr-calendar { background: #fff; border: 1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,.12); font-family: inherit; }
@@ -208,7 +221,7 @@ button.primary:hover { opacity: .9; }
 
     <section class="sortable-item" data-id="usage">
       <div class="card" id="usage-card">
-        <div class="card-head"><span class="drag-handle" title="拖拽排序">⠿</span><h3>每日积分使用量</h3></div>
+        <div class="card-head"><span class="drag-handle" title="拖拽排序">⠿</span><h3>消耗明细</h3><span class="usage-hint">点击柱子查看该日明细</span></div>
         <div class="quick-row" id="quick-row">
           <button class="chip" data-range="today">今天</button>
           <button class="chip" data-range="yesterday">昨天</button>
@@ -224,6 +237,7 @@ button.primary:hover { opacity: .9; }
           <button class="link-btn" id="btn-clear">清除筛选条件</button>
         </div>
         <div id="bar" class="chart"></div>
+        <div id="usage-detail" class="usage-detail hidden"></div>
       </div>
     </section>
   </div>
@@ -244,6 +258,7 @@ button.primary:hover { opacity: .9; }
   var fp = null;
   var state = { start: '', end: '', preset: '30d' };
   var ORDER_KEY = 'workbuddy-card-order';
+  var detailDate = null;
 
   function fmt(n) { return Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 }); }
   function pad(n) { return String(n).padStart(2, '0'); }
@@ -350,6 +365,52 @@ button.primary:hover { opacity: .9; }
     });
   }
 
+  function hideUsageDetail() {
+    detailDate = null;
+    var box = document.getElementById('usage-detail');
+    if (box) { box.className = 'usage-detail hidden'; box.innerHTML = ''; }
+  }
+
+  function showUsageDetail(item) {
+    var box = document.getElementById('usage-detail');
+    if (!box || !item) return;
+    detailDate = item.date;
+    box.innerHTML = '';
+
+    var head = document.createElement('div');
+    head.className = 'usage-detail-head';
+    var title = document.createElement('span');
+    title.textContent = item.date + ' · 共 ' + fmt(item.credits) + ' 积分 · ' + (item.requests || 0) + ' 次请求';
+    var close = document.createElement('button');
+    close.className = 'usage-detail-close';
+    close.textContent = '收起';
+    close.addEventListener('click', hideUsageDetail);
+    head.appendChild(title); head.appendChild(close);
+    box.appendChild(head);
+
+    var list = document.createElement('div');
+    list.className = 'usage-detail-list';
+    var records = (item.records || []).slice().sort(function (a, b) { return String(b.time).localeCompare(String(a.time)); });
+    if (!records.length) {
+      var empty = document.createElement('div');
+      empty.className = 'usage-detail-empty';
+      empty.textContent = '该日无记录';
+      list.appendChild(empty);
+    }
+    records.forEach(function (r) {
+      var row = document.createElement('div');
+      row.className = 'usage-detail-row';
+      var t = document.createElement('span'); t.className = 'ud-time'; t.textContent = r.time || '--:--';
+      var m = document.createElement('span'); m.className = 'ud-model'; m.textContent = r.model || '未知模型'; m.title = r.model || '';
+      var l = document.createElement('span'); l.className = 'ud-label'; l.textContent = r.label || '（无内容摘要）'; l.title = r.label || '';
+      var c = document.createElement('span'); c.className = 'ud-credit'; c.textContent = fmt(r.credits) + ' 积分';
+      row.appendChild(t); row.appendChild(m); row.appendChild(l); row.appendChild(c);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+    box.className = 'usage-detail';
+  }
+
   function renderBar() {
     if (!window.echarts) return;
     if (!barChart) barChart = echarts.init(document.getElementById('bar'), null, { renderer: 'canvas' });
@@ -362,6 +423,21 @@ button.primary:hover { opacity: .9; }
       yAxis: { type: 'value', axisLabel: { color: '#86909c', fontSize: 10 }, splitLine: { lineStyle: { color: '#f0f1f2' } } },
       series: [{ type: 'bar', data: items.map(function (d) { return d.credits; }), barMaxWidth: 18, itemStyle: { color: '#3370ff', borderRadius: [3, 3, 0, 0] }, emphasis: { itemStyle: { color: '#1e5eff' } } }]
     }, true);
+
+    barChart.off('click');
+    barChart.on('click', function (params) {
+      var item = items[params.dataIndex];
+      if (!item) return;
+      if (detailDate === item.date) { hideUsageDetail(); return; }
+      showUsageDetail(item);
+    });
+
+    if (detailDate && !items.some(function (d) { return d.date === detailDate; })) {
+      hideUsageDetail();
+    } else if (detailDate) {
+      var current = items.filter(function (d) { return d.date === detailDate; })[0];
+      if (current) showUsageDetail(current);
+    }
   }
 
   function presetRange(preset) {

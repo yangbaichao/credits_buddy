@@ -148,11 +148,19 @@ export async function fetchDailyUsage(session: AuthSession): Promise<DailyUsage[
   for (const row of rows) {
     const rawTime = pickValue(row, ['requestTime', 'request_time', 'time']);
     if (!rawTime) continue;
-    const date = String(rawTime).slice(0, 10);
+    const timeText = String(rawTime);
+    const date = timeText.slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    const bucket = buckets.get(date) ?? { date, credits: 0, requests: 0 };
-    bucket.credits += num(pickValue(row, ['credit', 'credits', 'usedCredit']));
+    const credits = num(pickValue(row, ['credit', 'credits', 'usedCredit']));
+    const bucket = buckets.get(date) ?? { date, credits: 0, requests: 0, records: [] };
+    bucket.credits += credits;
     bucket.requests += 1;
+    bucket.records?.push({
+      time: timeText.slice(11, 16),
+      model: String(pickValue(row, ['model', 'modelName', 'model_name']) ?? ''),
+      credits,
+      label: String(pickValue(row, ['inputTrunc', 'input', 'title', 'agentPurpose']) ?? '').slice(0, 40)
+    });
     buckets.set(date, bucket);
   }
   return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
