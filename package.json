@@ -1,0 +1,99 @@
+{
+  "name": "workbuddy-credit-dashboard",
+  "displayName": "WorkBuddy Credit Dashboard",
+  "description": "在编辑器内可视化查看 WorkBuddy 积分余额、额度消耗、签到状态与用量趋势",
+  "version": "0.1.0",
+  "publisher": "expandbuddy",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "workbuddy",
+    "codebuddy",
+    "credits",
+    "dashboard"
+  ],
+  "activationEvents": [
+    "onCommand:workbuddy-credit.openDashboard",
+    "onCommand:workbuddy-credit.refresh",
+    "onCommand:workbuddy-credit.logout",
+    "onView:workbuddyCredit.dashboard"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "workbuddy-credit.openDashboard",
+        "title": "WorkBuddy: 打开积分看板",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "workbuddy-credit.refresh",
+        "title": "WorkBuddy: 刷新积分数据"
+      },
+      {
+        "command": "workbuddy-credit.logout",
+        "title": "WorkBuddy: 退出登录"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "workbuddyCredit",
+          "title": "WorkBuddy 积分",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "workbuddyCredit": [
+        {
+          "type": "webview",
+          "id": "workbuddyCredit.dashboard",
+          "name": "积分看板"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "WorkBuddy Credit Dashboard",
+      "properties": {
+        "workbuddyCredit.refreshInterval": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "description": "自动刷新间隔（分钟），0 表示关闭自动刷新"
+        },
+        "workbuddyCredit.region": {
+          "type": "string",
+          "enum": [
+            "cn",
+            "global"
+          ],
+          "default": "cn",
+          "description": "账号区域：cn = www.workbuddy.cn，global = www.codebuddy.cn"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "echarts": "^5.5.1",
+    "flatpickr": "^4.6.13",
+    "sortablejs": "^1.15.7"
+  }
+}

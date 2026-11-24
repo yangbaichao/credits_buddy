@@ -1,0 +1,21 @@
+.vscode/**
+src/**
+out/**/*.map
+tsconfig.json
+.gitignore
+*.vsix
+package-lock.json
+
+# 临时 / 调试脚本，不应打进扩展包
+_*.py
+_*.js
+_*.txt
+*.log
+
+# 依赖：仅保留扩展运行时真正需要的文件
+node_modules/**
+!node_modules/echarts/dist/echarts.min.js
+!node_modules/flatpickr/dist/flatpickr.min.js
+!node_modules/flatpickr/dist/flatpickr.min.css
+!node_modules/flatpickr/dist/l10n/zh.js
+!node_modules/sortablejs/Sortable.min.js
