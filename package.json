@@ -3,7 +3,7 @@
   "displayName": "WorkBuddy Credit Dashboard",
   "description": "在编辑器内可视化查看 WorkBuddy 积分余额、额度消耗、签到状态与用量趋势",
   "version": "0.1.0",
-  "publisher": "expandbuddy",
+  "publisher": "yangbaichao",
   "license": "MIT",
   "engines": {
     "vscode": "^1.75.0"
@@ -44,7 +44,7 @@
       "activitybar": [
         {
           "id": "workbuddyCredit",
-          "title": "WorkBuddy 积分",
+          "title": "WorkBuddy 积分看板",
           "icon": "media/icon.svg"
         }
       ]
