@@ -4,7 +4,7 @@
 
 一个 VS Code / CodeBuddy 编辑器扩展，在侧边栏可视化展示积分余额、每日消耗明细与签到状态。所有数据都来自官方接口，真实、不造假。同一个扩展同时服务于 WorkBuddy 和 CodeBuddy：每个账号独立保存登录态，在账号下拉中切换即可，多个账号可以同时保存。
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/yangbaichao/credits_buddy)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/yangbaichao/credits_buddy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.75-blueviolet.svg)](https://code.visualstudio.com/)
 
@@ -34,7 +34,7 @@ WorkBuddy 和 CodeBuddy 的积分、额度和签到信息散落在网页里。�
 2. 在编辑器扩展视图选择「从 VSIX 安装」，或命令行：
 
 ```powershell
-& "C:\...\CodeBuddy CN\bin\code.cmd" --install-extension .\workbuddy-credit-dashboard-0.1.1.vsix
+& "C:\...\CodeBuddy CN\bin\code.cmd" --install-extension .\workbuddy-credit-dashboard-0.1.2.vsix
 ```
 
 安装后点击活动栏的「WorkBuddy 积分看板」图标，按提示完成一次授权即可。
@@ -89,7 +89,7 @@ npm run compile
 
 在 VS Code / CodeBuddy 中打开本目录，按 `F5` 启动 Extension Development Host，命令面板执行 `WorkBuddy: 打开积分看板`。
 
-打包：`npm run package`，生成 `workbuddy-credit-dashboard-0.1.1.vsix`。
+打包：`npm run package`，生成 `workbuddy-credit-dashboard-0.1.2.vsix`。
 
 ## 已知限制
 
