@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
 import {
   authorize,
-  clearSession,
-  loadSession,
-  saveSession
+  clearAllAccounts,
+  loadAccounts,
+  loadActiveAccount,
+  removeAccount,
+  saveAccount,
+  setActiveAccount
 } from './auth';
 import {
   createUnauthorizedData,
@@ -12,7 +15,7 @@ import {
 } from './api';
 import { recordSnapshot } from './usage';
 import { renderDashboardHtml } from './dashboard';
-import { AuthSession, DashboardData } from './types';
+import { AccountListItem, AccountSession, DashboardData } from './types';
 
 const VIEW_ID = 'workbuddyCredit.dashboard';
 
@@ -23,15 +26,39 @@ let statusBar: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let autoRefreshDisposable: vscode.Disposable | undefined;
 
-function getRegion(): string {
-  return vscode.workspace.getConfiguration('workbuddyCredit').get<string>('region', 'cn') || 'cn';
-}
-
 function formatCompact(value: number): string {
   if (value >= 10000) {
     return `${(value / 10000).toFixed(1)}w`;
   }
   return Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+}
+
+function getRegion(): string {
+  return vscode.workspace.getConfiguration('workbuddyCredit').get<string>('region', 'cn') || 'cn';
+}
+
+function maskUid(uid?: string): string {
+  if (!uid) return '';
+  return uid.length <= 8 ? uid : `${uid.slice(0, 4)}…${uid.slice(-4)}`;
+}
+
+function toAccountListItems(accounts: AccountSession[], activeId?: string): AccountListItem[] {
+  return accounts
+    .slice()
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    .map((account) => ({
+      id: account.id,
+      label: account.nickname || (account.region === 'global' ? 'CodeBuddy 用户' : 'WorkBuddy 用户'),
+      region: account.region,
+      uidMask: maskUid(account.uid),
+      isActive: account.id === activeId
+    }));
+}
+
+function attachAccounts(data: DashboardData, accounts: AccountSession[], activeId?: string): DashboardData {
+  data.accounts = toAccountListItems(accounts, activeId);
+  data.activeAccountId = activeId;
+  return data;
 }
 
 function localResourceRoots(context: vscode.ExtensionContext): vscode.Uri[] {
@@ -53,14 +80,25 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
 
     view.webview.onDidReceiveMessage(async (message) => {
       if (message?.command === 'refresh') {
-        await loadAndUpdate(this.context, getRegion());
+        await loadAndUpdate(this.context);
       } else if (message?.command === 'authorize') {
-        await doAuthorize(this.context, getRegion());
+        await doAuthorize(this.context, 'login', undefined, message.region);
+      } else if (message?.command === 'addAccount') {
+        await doAuthorize(this.context, 'add');
+      } else if (message?.command === 'reauthorize') {
+        await doAuthorize(this.context, 'reauth', message.id);
+      } else if (message?.command === 'switchAccount') {
+        await doSwitchAccount(this.context, message.id);
+      } else if (message?.command === 'removeAccount') {
+        await doRemoveAccount(this.context, message.id);
+      } else if (message?.command === 'removeAllAccounts') {
+        await doRemoveAllAccounts(this.context);
       } else if (message?.command === 'logout') {
-        await doLogout(this.context, getRegion());
+        const id = message.id ?? (await loadActiveAccount(this.context))?.id;
+        await doRemoveAccount(this.context, id);
       } else if (message?.command === 'checkin') {
         try {
-          const session = await loadSession(this.context);
+          const session = await loadActiveAccount(this.context);
           if (!session) {
             await view.webview.postMessage({
               type: 'checkinResult',
@@ -72,7 +110,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
           const result = await dailyCheckin(session);
           await view.webview.postMessage({ type: 'checkinResult', ...result });
           if (result.success) {
-            await loadAndUpdate(this.context, getRegion());
+            await loadAndUpdate(this.context, session);
           }
         } catch (error) {
           await view.webview.postMessage({
@@ -91,7 +129,13 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
     if (currentData) {
       view.webview.html = renderDashboardHtml(view.webview, this.context.extensionUri, currentData);
     } else {
-      void loadAndUpdate(this.context, getRegion());
+      view.webview.html = renderDashboardHtml(
+        view.webview,
+        this.context.extensionUri,
+        createUnauthorizedData(getRegion()),
+        true
+      );
+      void loadAndUpdate(this.context);
     }
   }
 }
@@ -116,14 +160,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('workbuddy-credit.openDashboard', async () => {
       await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
       if (!currentData) {
-        await loadAndUpdate(context, getRegion());
+        await loadAndUpdate(context);
       }
     }),
     vscode.commands.registerCommand('workbuddy-credit.refresh', async () => {
-      await loadAndUpdate(context, getRegion());
+      await loadAndUpdate(context);
     }),
     vscode.commands.registerCommand('workbuddy-credit.logout', async () => {
-      await doLogout(context, getRegion());
+      const active = await loadActiveAccount(context);
+      await doRemoveAccount(context, active?.id);
     })
   );
 
@@ -131,14 +176,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (
-        event.affectsConfiguration('workbuddyCredit.refreshInterval') ||
-        event.affectsConfiguration('workbuddyCredit.region')
-      ) {
-        if (event.affectsConfiguration('workbuddyCredit.region')) {
-          currentData = undefined;
-        }
+      if (event.affectsConfiguration('workbuddyCredit.refreshInterval')) {
         setupAutoRefresh(context);
+      }
+      if (event.affectsConfiguration('workbuddyCredit.region') && !currentData?.authorized) {
+        void loadAndUpdate(context);
       }
     })
   );
@@ -161,7 +203,7 @@ function setupAutoRefresh(context: vscode.ExtensionContext): void {
 
   refreshTimer = setInterval(() => {
     if (currentData?.authorized && (webviewView?.visible || panel?.visible)) {
-      void loadAndUpdate(context, getRegion());
+      void loadAndUpdate(context);
     }
   }, minutes * 60 * 1000);
 
@@ -183,20 +225,44 @@ function renderToTarget(context: vscode.ExtensionContext, data: DashboardData): 
   }
 }
 
-async function doAuthorize(context: vscode.ExtensionContext, region: string): Promise<void> {
-  console.error('[workbuddy-credit] doAuthorize triggered');
+function postLoading(message = '加载中…'): void {
+  void webviewView?.webview.postMessage({ type: 'loading', message });
+  void panel?.webview.postMessage({ type: 'loading', message });
+}
+
+function postHideLoading(): void {
+  void webviewView?.webview.postMessage({ type: 'loading', hide: true });
+  void panel?.webview.postMessage({ type: 'loading', hide: true });
+}
+
+type AuthMode = 'login' | 'add' | 'reauth';
+
+async function doAuthorize(
+  context: vscode.ExtensionContext,
+  mode: AuthMode,
+  accountId?: string,
+  region?: string
+): Promise<void> {
+  console.error('[workbuddy-credit] doAuthorize triggered, mode=' + mode);
   const postAuth = (payload: Record<string, unknown>): void => {
-    void webviewView?.webview.postMessage({ type: 'authStatus', ...payload });
+    const body = mode === 'login' ? payload : { mode, ...payload };
+    void webviewView?.webview.postMessage({ type: 'authStatus', ...body });
   };
-  postAuth({ state: 'waiting', message: '已打开浏览器，请完成微信扫码登录并在手机上确认…' });
+  const previousId = mode === 'reauth'
+    ? (accountId ?? (await loadActiveAccount(context))?.id)
+    : undefined;
+  const previous = previousId ? (await loadAccounts(context))[previousId] : undefined;
+  const rawRegion = region || previous?.region || getRegion();
+  const targetRegion = rawRegion === 'global' ? 'global' : 'cn';
+  postAuth({ state: 'waiting', message: '已打开浏览器，请完成官方登录并在手机上确认…' });
   try {
     const session = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: 'WorkBuddy 授权中，请在浏览器完成登录…',
+        title: mode === 'reauth' ? '重新授权中，请在浏览器完成登录…' : '积分账号授权中，请在浏览器完成登录…',
         cancellable: false
       },
-      () => authorize(region, {
+      () => authorize(targetRegion, {
         onUrl: (authUrl) => postAuth({ state: 'waiting', message: '请在刚打开的浏览器窗口扫码登录', authUrl }),
         onProgress: (attempt, totalSeconds, code, msg) => postAuth({
           state: 'waiting',
@@ -206,11 +272,18 @@ async function doAuthorize(context: vscode.ExtensionContext, region: string): Pr
       })
     );
     console.error('[workbuddy-credit] authorize returned session, saving');
-    await saveSession(context, session);
-    console.error('[workbuddy-credit] session saved, loading dashboard');
-    await loadAndUpdate(context, region, session);
+    const account = await saveAccount(context, session, previousId);
+    console.error('[workbuddy-credit] account saved: ' + account.id);
+    await loadAndUpdate(context, account);
     postAuth({ state: 'idle' });
-    void vscode.window.showInformationMessage('WorkBuddy 授权成功');
+    const label = account.nickname || 'WorkBuddy 用户';
+    if (mode === 'add') {
+      void vscode.window.showInformationMessage(`已添加并切换到 ${label}`);
+    } else if (mode === 'reauth') {
+      void vscode.window.showInformationMessage(`已重新授权 ${label}`);
+    } else {
+      void vscode.window.showInformationMessage('授权成功');
+    }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error('[workbuddy-credit] doAuthorize error: ' + reason, error);
@@ -219,33 +292,75 @@ async function doAuthorize(context: vscode.ExtensionContext, region: string): Pr
   }
 }
 
-async function doLogout(context: vscode.ExtensionContext, region: string): Promise<void> {
-  await clearSession(context);
-  const data = createUnauthorizedData(region);
-  currentData = data;
-  renderToTarget(context, data);
-  updateStatusBar(data);
-  void vscode.window.showInformationMessage('已退出 WorkBuddy 账号');
+async function doSwitchAccount(context: vscode.ExtensionContext, id?: string): Promise<void> {
+  if (!id) return;
+  try {
+    const account = await setActiveAccount(context, id);
+    if (!account) {
+      postHideLoading();
+      return;
+    }
+    await loadAndUpdate(context, account);
+  } catch (error) {
+    postHideLoading();
+    const reason = error instanceof Error ? error.message : String(error);
+    void vscode.window.showErrorMessage(`切换账号失败：${reason}`);
+  }
+}
+
+async function doRemoveAccount(context: vscode.ExtensionContext, id?: string): Promise<void> {
+  if (!id) return;
+  const accounts = await loadAccounts(context);
+  const target = accounts[id];
+  if (!target) return;
+  const label = target.nickname || 'WorkBuddy 用户';
+  const choice = await vscode.window.showWarningMessage(
+    `确定退出并删除账号「${label}」吗？该账号的本地登录信息将被清除。`,
+    { modal: true },
+    '确认退出'
+  );
+  if (choice !== '确认退出') return;
+  await removeAccount(context, id);
+  await loadAndUpdate(context);
+  void vscode.window.showInformationMessage(`已退出 ${label}`);
+}
+
+async function doRemoveAllAccounts(context: vscode.ExtensionContext): Promise<void> {
+  const accounts = await loadAccounts(context);
+  if (!Object.keys(accounts).length) return;
+  const choice = await vscode.window.showWarningMessage(
+    '确定退出全部账号吗？所有本地登录信息将被清除。',
+    { modal: true },
+    '确认退出'
+  );
+  if (choice !== '确认退出') return;
+  await clearAllAccounts(context);
+  await loadAndUpdate(context);
+  void vscode.window.showInformationMessage('已退出全部账号');
 }
 
 async function loadAndUpdate(
   context: vscode.ExtensionContext,
-  region: string,
-  explicitSession?: AuthSession
+  explicitAccount?: AccountSession
 ): Promise<void> {
-  const session = explicitSession ?? await loadSession(context);
+  postLoading('正在加载积分数据…');
+  const session = explicitAccount ?? await loadActiveAccount(context);
+  const accountList = Object.values(await loadAccounts(context));
+  const activeId = session?.id;
   if (!session) {
-    const data = createUnauthorizedData(region);
+    const data = attachAccounts(createUnauthorizedData(getRegion()), accountList, undefined);
     currentData = data;
     renderToTarget(context, data);
     updateStatusBar(data);
     return;
   }
 
+  const region = session.region;
   try {
     const data = await fetchDashboard(session, region);
     recordSnapshot(context, data.summary.usedCredits, data.summary.remainCredits);
     data.nickname = session.nickname;
+    attachAccounts(data, accountList, activeId);
 
     currentData = data;
     renderToTarget(context, data);
@@ -256,6 +371,8 @@ async function loadAndUpdate(
     data.authorized = true;
     data.error = reason;
     data.notice = `读取实时数据失败：${reason}`;
+    data.nickname = session.nickname;
+    attachAccounts(data, accountList, activeId);
     currentData = data;
     renderToTarget(context, data);
     updateStatusBar(data);
@@ -264,18 +381,23 @@ async function loadAndUpdate(
 }
 
 function updateStatusBar(data: DashboardData): void {
+  const platform = data.region === 'global' ? 'CodeBuddy' : 'WorkBuddy';
   if (!data.authorized) {
-    statusBar.text = '$(graph) WorkBuddy 未授权';
-    statusBar.tooltip = '点击打开看板并登录 WorkBuddy 账号';
+    statusBar.text = `$(graph) ${platform} 未授权`;
+    statusBar.tooltip = `点击打开看板并登录 ${platform} 账号`;
     return;
   }
-  statusBar.text = `$(graph) WorkBuddy ${formatCompact(data.summary.remainCredits)}`;
-  statusBar.tooltip = [
-    'WorkBuddy 积分看板',
+  statusBar.text = `$(graph) ${platform} ${formatCompact(data.summary.remainCredits)}`;
+  const tooltip = [`${platform} 积分看板`];
+  if (data.nickname) {
+    tooltip.push(`账号：${data.nickname}`);
+  }
+  tooltip.push(
     `剩余：${data.summary.remainCredits}`,
     `已用：${data.summary.usedCredits}`,
     '点击查看完整看板'
-  ].join('\n');
+  );
+  statusBar.tooltip = tooltip.join('\n');
 }
 
 export function deactivate(): void {

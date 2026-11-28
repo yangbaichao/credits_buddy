@@ -14,7 +14,8 @@ function getNonce(): string {
 export function renderDashboardHtml(
   webview: vscode.Webview,
   extensionUri: vscode.Uri,
-  data: DashboardData
+  data: DashboardData,
+  initialLoading = false
 ): string {
   const modulePath = path.join(extensionUri.fsPath, 'node_modules');
   const echartsUri = webview.asWebviewUri(vscode.Uri.file(path.join(modulePath, 'echarts', 'dist', 'echarts.min.js')));
@@ -23,6 +24,7 @@ export function renderDashboardHtml(
   const zhLocaleUri = webview.asWebviewUri(vscode.Uri.file(path.join(modulePath, 'flatpickr', 'dist', 'l10n', 'zh.js')));
   const sortableUri = webview.asWebviewUri(vscode.Uri.file(path.join(modulePath, 'sortablejs', 'Sortable.min.js')));
   const nonce = getNonce();
+  const loadingClass = initialLoading ? '' : ' hidden';
   const csp = `default-src 'none'; img-src ${webview.cspSource} https:; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';`;
   const payload = JSON.stringify(data).replace(/</g, '\\u003c');
 
@@ -48,6 +50,11 @@ button.primary { background: var(--primary); border-color: var(--primary); color
 button.primary:hover { opacity: .9; }
 .hidden { display: none !important; }
 
+.loading-overlay { position: fixed; inset: 0; z-index: 200000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(245,246,248,.9); color: var(--muted); font-size: 12px; }
+.loading-overlay.hidden { display: none; }
+.loading-spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: loading-spin .8s linear infinite; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+
 .auth-page { display: flex; align-items: center; justify-content: center; min-height: 380px; padding: 20px; }
 .auth-card { text-align: center; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px 24px; max-width: 320px; width: 100%; box-shadow: var(--shadow); }
 .auth-logo { width: 56px; height: 56px; border-radius: 16px; background: linear-gradient(135deg, #3370ff, #7aa9ff); color: #fff; font-size: 28px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; }
@@ -72,7 +79,11 @@ button.primary:hover { opacity: .9; }
 .user-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
 .nickname { font-size: 13px; font-weight: 600; }
+.account-select { max-width: 240px; font-size: 13px; font-weight: 600; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.account-select:disabled { opacity: .6; }
 .user-hint { font-size: 11px; color: var(--muted); }
+.account-status { font-size: 11px; color: var(--muted); }
+.account-status.error { color: #d0372b; }
 .notice { margin-bottom: 14px; padding: 9px 12px; border-radius: 6px; background: #fff7e8; border: 1px solid #ffd591; color: #a85b00; font-size: 12px; }
 .notice.error { background: #ffece8; border-color: #ffccc7; color: #a8071a; }
 
@@ -157,10 +168,15 @@ button.primary:hover { opacity: .9; }
 </head>
 <body>
 
+<div class="loading-overlay${loadingClass}" id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div id="loading-text">加载中…</div>
+</div>
+
 <div class="auth-page" id="auth-page">
   <div class="auth-card">
     <div class="auth-logo">W</div>
-    <h2>登录 WorkBuddy</h2>
+    <h2>登录积分账号</h2>
     <p>授权后即可查看积分余额、额度消耗、签到状态与每日用量</p>
     <button class="auth-btn" id="btn-authorize">授权登录</button>
     <div class="auth-status" id="auth-status"></div>
@@ -168,7 +184,7 @@ button.primary:hover { opacity: .9; }
       <input type="text" readonly id="auth-link-input">
       <button type="button" id="btn-copy-link">复制链接</button>
     </div>
-    <div class="auth-hint">将打开浏览器完成 WorkBuddy 官方登录</div>
+    <div class="auth-hint">将打开浏览器完成官方登录</div>
   </div>
 </div>
 
@@ -177,13 +193,13 @@ button.primary:hover { opacity: .9; }
     <div><div class="title">WorkBuddy 积分看板</div><div class="subtitle" id="subtitle"></div></div>
     <div class="actions">
       <button id="btn-refresh">刷新</button>
-      <button id="btn-logout">退出</button>
     </div>
   </div>
   <div class="user-bar">
     <div class="avatar" id="avatar">W</div>
-    <span class="nickname" id="nickname">WorkBuddy 用户</span>
-    <span class="user-hint">WorkBuddy 账号</span>
+    <select class="account-select" id="account-select" aria-label="切换账号"></select>
+    <span class="user-hint" id="user-hint">WorkBuddy 账号</span>
+    <span class="account-status" id="account-status"></span>
   </div>
   <div class="notice hidden" id="notice"></div>
 
@@ -260,6 +276,14 @@ button.primary:hover { opacity: .9; }
   var ORDER_KEY = 'workbuddy-card-order';
   var detailDate = null;
 
+  function showLoading(text) {
+    document.getElementById('loading-text').textContent = text || '加载中…';
+    document.getElementById('loading-overlay').classList.remove('hidden');
+  }
+  function hideLoading() {
+    document.getElementById('loading-overlay').classList.add('hidden');
+  }
+
   function fmt(n) { return Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 }); }
   function pad(n) { return String(n).padStart(2, '0'); }
   function keyOf(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
@@ -274,8 +298,58 @@ button.primary:hover { opacity: .9; }
     state.preset = '30d';
   }
 
+  function addOption(group, value, label) {
+    var option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    group.appendChild(option);
+  }
+
+  function renderAccountSelect(data) {
+    var select = document.getElementById('account-select');
+    select.options.length = 0;
+
+    var accountGroup = document.createElement('optgroup');
+    accountGroup.label = '当前账号';
+    (data.accounts || []).forEach(function (account) {
+      var label = account.label || 'WorkBuddy 用户';
+      if (account.uidMask) label += '（' + account.uidMask + '）';
+      var option = document.createElement('option');
+      option.value = account.id;
+      option.textContent = label;
+      option.selected = !!account.isActive;
+      accountGroup.appendChild(option);
+    });
+    select.appendChild(accountGroup);
+
+    var authGroup = document.createElement('optgroup');
+    authGroup.label = '登录与授权';
+    addOption(authGroup, '__add__', '＋ 登录其他账号');
+    addOption(authGroup, '__reauth__', '↻ 重新授权当前账号');
+    select.appendChild(authGroup);
+
+    var actionGroup = document.createElement('optgroup');
+    actionGroup.label = '账号操作';
+    addOption(actionGroup, '__logout__', '× 退出当前账号');
+    addOption(actionGroup, '__logout_all__', '× 退出全部账号');
+    select.appendChild(actionGroup);
+
+    var hasActive = Array.prototype.some.call(select.options, function (option) {
+      return option.value === data.activeAccountId;
+    });
+    if (hasActive) {
+      select.value = data.activeAccountId;
+    }
+    var active = (data.accounts || []).filter(function (account) {
+      return account.isActive || account.id === data.activeAccountId;
+    })[0];
+    document.getElementById('user-hint').textContent =
+      active && active.region === 'global' ? 'CodeBuddy 账号' : 'WorkBuddy 账号';
+  }
+
   function render(data) {
     sourceData = data;
+    hideLoading();
     if (!data.authorized) {
       document.getElementById('auth-page').classList.remove('hidden');
       document.getElementById('main-page').classList.add('hidden');
@@ -286,11 +360,11 @@ button.primary:hover { opacity: .9; }
 
     var s = data.summary || {};
     document.getElementById('subtitle').textContent =
-      (data.region === 'global' ? '国际版' : '国内版') + ' · 更新于 ' + new Date(data.fetchedAt).toLocaleString('zh-CN');
+      (data.region === 'global' ? 'CodeBuddy' : 'WorkBuddy') + ' · 更新于 ' + new Date(data.fetchedAt).toLocaleString('zh-CN');
 
     var nickname = data.nickname || 'WorkBuddy 用户';
-    document.getElementById('nickname').textContent = nickname;
     document.getElementById('avatar').textContent = nickname.trim().charAt(0).toUpperCase() || 'W';
+    renderAccountSelect(data);
 
     var notice = document.getElementById('notice');
     var message = data.error ? ('数据加载失败：' + data.error) : data.notice;
@@ -528,7 +602,29 @@ button.primary:hover { opacity: .9; }
     status.textContent = '正在打开浏览器…'; status.className = 'auth-status show';
     vscode.postMessage({ command: 'authorize' });
   });
-  document.getElementById('btn-logout').addEventListener('click', function () { vscode.postMessage({ command: 'logout' }); });
+  document.getElementById('account-select').addEventListener('change', function (e) {
+    var select = e.target;
+    var value = select.value;
+    var activeId = sourceData && sourceData.activeAccountId;
+    if (value === '__add__') {
+      vscode.postMessage({ command: 'addAccount' });
+    } else if (value === '__reauth__') {
+      vscode.postMessage({ command: 'reauthorize', id: activeId });
+    } else if (value === '__logout__') {
+      vscode.postMessage({ command: 'logout', id: activeId });
+    } else if (value === '__logout_all__') {
+      vscode.postMessage({ command: 'removeAllAccounts' });
+    } else if (value && value.indexOf('__') !== 0) {
+      showLoading('正在切换账号…');
+      vscode.postMessage({ command: 'switchAccount', id: value });
+    }
+    var hasActive = Array.prototype.some.call(select.options, function (option) {
+      return option.value === activeId;
+    });
+    if (hasActive) {
+      select.value = activeId;
+    }
+  });
   document.getElementById('btn-copy-link').addEventListener('click', function () {
     var input = document.getElementById('auth-link-input');
     input.select();
@@ -540,7 +636,10 @@ button.primary:hover { opacity: .9; }
     var preset = e.target.getAttribute && e.target.getAttribute('data-range');
     if (preset) applyPreset(preset);
   });
-  document.getElementById('btn-refresh').addEventListener('click', function () { vscode.postMessage({ command: 'refresh' }); });
+  document.getElementById('btn-refresh').addEventListener('click', function () {
+    showLoading('正在刷新数据…');
+    vscode.postMessage({ command: 'refresh' });
+  });
   document.getElementById('btn-checkin').addEventListener('click', function () {
     var btn = this;
     btn.disabled = true; btn.textContent = '签到中…';
@@ -562,20 +661,41 @@ button.primary:hover { opacity: .9; }
     var d = event.data;
     if (!d) return;
     if (d.type === 'update') render(d.data);
+    if (d.type === 'loading') {
+      if (d.hide) hideLoading(); else showLoading(d.message);
+    }
     if (d.type === 'authStatus') {
       var btn = document.getElementById('btn-authorize');
       var status = document.getElementById('auth-status');
-      if (d.state === 'waiting') {
-        btn.disabled = true; btn.textContent = '授权中…';
-        status.textContent = d.message || '等待浏览器授权中…';
-        status.className = 'auth-status show';
-      } else if (d.state === 'error') {
-        btn.disabled = false; btn.textContent = '重新授权';
-        status.textContent = d.message || '授权失败，请重试';
-        status.className = 'auth-status show error';
+      var accountSelect = document.getElementById('account-select');
+      var accountStatus = document.getElementById('account-status');
+      if (!d.mode || d.mode === 'login') {
+        if (d.state === 'waiting') {
+          btn.disabled = true; btn.textContent = '授权中…';
+          status.textContent = d.message || '等待浏览器授权中…';
+          status.className = 'auth-status show';
+        } else if (d.state === 'error') {
+          btn.disabled = false; btn.textContent = '重新授权';
+          status.textContent = d.message || '授权失败，请重试';
+          status.className = 'auth-status show error';
+        } else {
+          btn.disabled = false; btn.textContent = '授权登录';
+          status.textContent = ''; status.className = 'auth-status';
+        }
       } else {
-        btn.disabled = false; btn.textContent = '授权登录';
-        status.textContent = ''; status.className = 'auth-status';
+        if (d.state === 'waiting') {
+          accountSelect.disabled = true;
+          accountStatus.textContent = d.message || '等待浏览器授权中…';
+          accountStatus.className = 'account-status';
+        } else if (d.state === 'error') {
+          accountSelect.disabled = false;
+          accountStatus.textContent = d.message || '授权失败，请重试';
+          accountStatus.className = 'account-status error';
+        } else {
+          accountSelect.disabled = false;
+          accountStatus.textContent = '';
+          accountStatus.className = 'account-status';
+        }
       }
       var linkBox = document.getElementById('auth-link-box');
       if (d.authUrl) {

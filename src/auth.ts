@@ -1,14 +1,28 @@
+import { createHash } from 'crypto';
 import * as vscode from 'vscode';
-import { AuthSession } from './types';
+import { AccountSession, AuthSession, Region } from './types';
 import { requestJson } from './http';
 
-const SECRET_KEY = 'workbuddy-credit.session';
+const LEGACY_SECRET_KEY = 'workbuddy-credit.session';
+const LEGACY_BACKUP_KEY = 'workbuddy-credit.session.backup';
+const ACCOUNTS_KEY = 'workbuddy-credit.accounts';
+const ACTIVE_KEY = 'workbuddy-credit.activeAccount';
+
+type AccountMap = Record<string, AccountSession>;
 
 export function domainForRegion(region: string): string {
   return region === 'global' ? 'www.codebuddy.cn' : 'www.workbuddy.cn';
 }
 
-const BACKUP_KEY = 'workbuddy-credit.session.backup';
+export function regionForDomain(domain: string): Region {
+  return domain === 'www.codebuddy.cn' ? 'global' : 'cn';
+}
+
+export function accountIdFor(session: AuthSession): string {
+  const region = regionForDomain(session.domain);
+  const uid = session.uid || createHash('sha256').update(session.accessToken).digest('hex').slice(0, 12);
+  return `${region}:${uid}`;
+}
 
 function nicknameFromToken(token: string): string {
   try {
@@ -38,52 +52,192 @@ function usable(session: AuthSession | undefined): boolean {
   return Boolean(session && typeof session.accessToken === 'string' && session.accessToken.length > 20);
 }
 
+function toAccountSession(session: AuthSession, previous?: AccountSession): AccountSession {
+  const now = Date.now();
+  return {
+    ...session,
+    id: accountIdFor(session),
+    region: regionForDomain(session.domain),
+    addedAt: previous?.addedAt ?? now,
+    lastUsedAt: now
+  };
+}
+
+function parseAccounts(raw: string | undefined): AccountMap {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as AccountMap;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const result: AccountMap = {};
+    Object.keys(parsed).forEach((key) => {
+      const item = parsed[key] as AuthSession | undefined;
+      if (!item || typeof item !== 'object') return;
+      const filled = fillNickname(item);
+      if (!usable(filled)) return;
+      result[key] = {
+        ...filled,
+        id: key,
+        region: regionForDomain(filled.domain),
+        addedAt: Number((item as AccountSession).addedAt) || Date.now(),
+        lastUsedAt: Number((item as AccountSession).lastUsedAt) || Date.now()
+      };
+    });
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+async function readAccountsRaw(context: vscode.ExtensionContext): Promise<AccountMap> {
+  // 与旧的 loadSession 一致：globalState 备份优先。它在每次写入时都会更新，
+  // 即使某些 fork 的 secrets.store 失败，也不会把已删除的账号读回来。
+  const backupRaw = context.globalState.get<string>(ACCOUNTS_KEY);
+  if (backupRaw !== undefined) {
+    try {
+      JSON.parse(backupRaw);
+      return parseAccounts(backupRaw);
+    } catch (error) {
+      console.error('[workbuddy-credit] accounts backup is corrupted, falling back to secrets:', error);
+    }
+  }
+  try {
+    return parseAccounts(await context.secrets.get(ACCOUNTS_KEY));
+  } catch (error) {
+    console.error('[workbuddy-credit] secrets.get accounts failed:', error);
+    return {};
+  }
+}
+
+async function writeAccounts(context: vscode.ExtensionContext, accounts: AccountMap): Promise<void> {
+  const raw = JSON.stringify(accounts);
+  // 与现有单会话行为一致：SecretStorage 为主，globalState 为备份（某些 fork 的 secrets 写入不可靠）
+  await context.globalState.update(ACCOUNTS_KEY, raw);
+  try {
+    await context.secrets.store(ACCOUNTS_KEY, raw);
+  } catch (error) {
+    console.error('[workbuddy-credit] secrets.store accounts failed, using globalState backup:', error);
+  }
+}
+
+async function clearLegacySession(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    await context.secrets.delete(LEGACY_SECRET_KEY);
+  } catch (error) {
+    console.error('[workbuddy-credit] secrets.delete legacy session failed:', error);
+  }
+  await context.globalState.update(LEGACY_BACKUP_KEY, undefined);
+}
+
+export async function migrateLegacySession(context: vscode.ExtensionContext): Promise<void> {
+  const candidates: string[] = [];
+  const backup = context.globalState.get<string>(LEGACY_BACKUP_KEY);
+  if (backup) candidates.push(backup);
+  try {
+    const secret = await context.secrets.get(LEGACY_SECRET_KEY);
+    if (secret) candidates.push(secret);
+  } catch (error) {
+    console.error('[workbuddy-credit] secrets.get legacy session failed:', error);
+  }
+  if (!candidates.length) return;
+
+  let account: AccountSession | undefined;
+  for (const raw of candidates) {
+    try {
+      const parsed = fillNickname(JSON.parse(raw) as AuthSession);
+      if (usable(parsed)) {
+        account = toAccountSession(parsed);
+        break;
+      }
+    } catch (error) {
+      console.error('[workbuddy-credit] parse legacy session failed:', error);
+    }
+  }
+  if (!account) return;
+
+  const accounts = await readAccountsRaw(context);
+  if (!accounts[account.id]) {
+    accounts[account.id] = account;
+    await writeAccounts(context, accounts);
+  }
+  const active = context.globalState.get<string>(ACTIVE_KEY);
+  if (!active || !accounts[active]) {
+    await context.globalState.update(ACTIVE_KEY, account.id);
+  }
+  await clearLegacySession(context);
+  console.error('[workbuddy-credit] migrated legacy session to accounts: ' + account.id);
+}
+
+export async function loadAccounts(context: vscode.ExtensionContext): Promise<AccountMap> {
+  await migrateLegacySession(context);
+  return readAccountsRaw(context);
+}
+
+export async function saveAccount(
+  context: vscode.ExtensionContext,
+  session: AuthSession,
+  previousId?: string
+): Promise<AccountSession> {
+  const accounts = await loadAccounts(context);
+  const previous = previousId ? accounts[previousId] : accounts[accountIdFor(session)];
+  const account = toAccountSession(session, previous);
+  if (previous && previous.id !== account.id) {
+    delete accounts[previous.id];
+  }
+  accounts[account.id] = account;
+  await writeAccounts(context, accounts);
+  await context.globalState.update(ACTIVE_KEY, account.id);
+  return account;
+}
+
+export async function setActiveAccount(context: vscode.ExtensionContext, id: string): Promise<AccountSession | undefined> {
+  const accounts = await loadAccounts(context);
+  if (!accounts[id]) return undefined;
+  accounts[id] = { ...accounts[id], lastUsedAt: Date.now() };
+  await writeAccounts(context, accounts);
+  await context.globalState.update(ACTIVE_KEY, id);
+  return accounts[id];
+}
+
+export async function loadActiveAccount(context: vscode.ExtensionContext): Promise<AccountSession | undefined> {
+  const accounts = await loadAccounts(context);
+  const id = context.globalState.get<string>(ACTIVE_KEY);
+  if (id && accounts[id]) return accounts[id];
+  const first = Object.values(accounts).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0];
+  if (first) {
+    await context.globalState.update(ACTIVE_KEY, first.id);
+  }
+  return first;
+}
+
+export async function removeAccount(context: vscode.ExtensionContext, id: string): Promise<void> {
+  const accounts = await loadAccounts(context);
+  if (!accounts[id]) return;
+  delete accounts[id];
+  const active = context.globalState.get<string>(ACTIVE_KEY);
+  const next = active === id
+    ? Object.values(accounts).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]?.id
+    : active;
+  await writeAccounts(context, accounts);
+  await context.globalState.update(ACTIVE_KEY, next);
+}
+
+export async function clearAllAccounts(context: vscode.ExtensionContext): Promise<void> {
+  await writeAccounts(context, {});
+  await context.globalState.update(ACTIVE_KEY, undefined);
+  await clearLegacySession(context);
+}
+
+// 兼容入口：旧代码仍可按单会话方式读取/写入。
 export async function loadSession(context: vscode.ExtensionContext): Promise<AuthSession | undefined> {
-  // 备份（globalState）优先：它由 saveSession 双写，且可被可靠读取；
-  // SecretStorage 在部分 fork 里可能残留旧值或读取失败。
-  const backup = context.globalState.get<string>(BACKUP_KEY);
-  if (backup) {
-    try {
-      const parsed = fillNickname(JSON.parse(backup) as AuthSession);
-      if (usable(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // fall through to secrets
-    }
-  }
-  const stored = await context.secrets.get(SECRET_KEY);
-  if (stored) {
-    try {
-      const parsed = fillNickname(JSON.parse(stored) as AuthSession);
-      if (usable(parsed)) {
-        return parsed;
-      }
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
+  return loadActiveAccount(context);
 }
 
 export async function saveSession(context: vscode.ExtensionContext, session: AuthSession): Promise<void> {
-  const raw = JSON.stringify(session);
-  // 双写：SecretStorage 为主，globalState 为备份（某些 fork 的 secrets 写入不可靠）
-  await context.globalState.update(BACKUP_KEY, raw);
-  try {
-    await context.secrets.store(SECRET_KEY, raw);
-  } catch (error) {
-    console.error('[workbuddy-credit] secrets.store failed, using globalState backup:', error);
-  }
+  await saveAccount(context, session);
 }
 
 export async function clearSession(context: vscode.ExtensionContext): Promise<void> {
-  try {
-    await context.secrets.delete(SECRET_KEY);
-  } catch (error) {
-    console.error('[workbuddy-credit] secrets.delete failed:', error);
-  }
-  await context.globalState.update(BACKUP_KEY, undefined);
+  await clearAllAccounts(context);
 }
 
 export interface AuthorizeCallbacks {
@@ -127,7 +281,7 @@ export async function authorize(region: string, callbacks: AuthorizeCallbacks = 
   }
 
   // 提示不阻塞轮询
-  void vscode.window.showInformationMessage('请在浏览器中完成 WorkBuddy 登录（微信扫码并在手机上确认），扩展会自动继续。');
+  void vscode.window.showInformationMessage('请在浏览器中完成官方登录（微信扫码并在手机上确认），扩展会自动继续。');
 
   const maxAttempts = 180;
   let lastCode: unknown = '';

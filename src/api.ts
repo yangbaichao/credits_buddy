@@ -222,7 +222,8 @@ export async function fetchDashboard(session: AuthSession, region: string): Prom
     summary,
     checkin,
     dailyUsage,
-    notice: notices.length ? notices.join('；') : undefined
+    notice: notices.length ? notices.join('；') : undefined,
+    accounts: []
   };
 }
 
@@ -254,6 +255,7 @@ export function createUnauthorizedData(region: string): DashboardData {
     region,
     summary: { totalCredits: 0, usedCredits: 0, remainCredits: 0, packages: [] },
     dailyUsage: [],
-    notice: '尚未授权，请点击下方按钮登录 WorkBuddy 账号'
+    notice: '尚未授权，请点击下方按钮登录',
+    accounts: []
   };
 }

@@ -1,8 +1,9 @@
 {
   "name": "workbuddy-credit-dashboard",
   "displayName": "WorkBuddy Credit Dashboard",
-  "description": "不用离开编辑器，实时查看 WorkBuddy 积分余额、每日消耗明细与签到状态。",
-  "version": "0.1.0",
+  "description": "不用离开编辑器，实时查看 WorkBuddy / CodeBuddy 积分余额、每日消耗明细与签到状态，支持多账号切换。",
+  "version": "0.1.2",
+  "icon": "media/marketplace-icon.png",
   "publisher": "yangbaichao",
   "license": "MIT",
   "repository": {
@@ -86,7 +87,7 @@
             "global"
           ],
           "default": "cn",
-          "description": "账号区域：cn = www.workbuddy.cn，global = www.codebuddy.cn"
+          "description": "新增账号使用的服务地址：cn = www.workbuddy.cn，global = www.codebuddy.cn；已保存账号不受影响"
         }
       }
     }

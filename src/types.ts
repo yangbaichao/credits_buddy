@@ -1,4 +1,5 @@
 export type DataSource = 'live';
+export type Region = 'cn' | 'global';
 
 export interface CreditPackage {
   name: string;
@@ -51,6 +52,14 @@ export interface UsageSnapshot {
   ts: number;
 }
 
+export interface AccountListItem {
+  id: string;
+  label: string;
+  region: Region;
+  uidMask?: string;
+  isActive: boolean;
+}
+
 export interface DashboardData {
   source: DataSource;
   authorized: boolean;
@@ -62,6 +71,8 @@ export interface DashboardData {
   dailyUsage: DailyUsage[];
   notice?: string;
   error?: string;
+  accounts: AccountListItem[];
+  activeAccountId?: string;
 }
 
 export interface AuthSession {
@@ -70,6 +81,13 @@ export interface AuthSession {
   domain: string;
   nickname?: string;
   source: 'oauth' | 'desktop';
+}
+
+export interface AccountSession extends AuthSession {
+  id: string;
+  region: Region;
+  addedAt: number;
+  lastUsedAt: number;
 }
 
 export interface ApiEnvelope {
